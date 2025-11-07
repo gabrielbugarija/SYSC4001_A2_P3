@@ -28,7 +28,7 @@ std::tuple<std::string, std::string, int> simulate_trace(std::vector<std::string
             execution += intr;
             current_time = time;
 
-            execution += std::to_string(current_time) + ", " + std::to_string(delays[duration_intr]) + ", SYSCALL ISR (ADD STEPS HERE)\n";
+            execution += std::to_string(current_time) + ", " + std::to_string(delays[duration_intr]) + ", SYSCALL ISR: handle syscall (validate args, perform service)\n";
             current_time += delays[duration_intr];
 
             execution +=  std::to_string(current_time) + ", 1, IRET\n";
@@ -38,11 +38,32 @@ std::tuple<std::string, std::string, int> simulate_trace(std::vector<std::string
             current_time = time;
             execution += intr;
 
-            execution += std::to_string(current_time) + ", " + std::to_string(delays[duration_intr]) + ", ENDIO ISR(ADD STEPS HERE)\n";
+            execution += std::to_string(current_time) + ", " + std::to_string(delays[duration_intr]) + ", ENDIO ISR: complete I/O, wake waiting process (if any)\n";
             current_time += delays[duration_intr];
 
-            execution +=  std::to_string(current_time) + ", 1, IRET\n";
-            current_time += 1;
+            // If there is a process waiting (blocked on I/O), wake it and schedule
+            if(!wait_queue.empty()) {
+                // wake the first waiting process (FCFS)
+                PCB awakened = wait_queue.front();
+                wait_queue.erase(wait_queue.begin());
+
+                // Log that the process was woken and a snapshot of the system
+                system_status += "time: " + std::to_string(current_time) + "; current trace: END_IO, " + std::to_string(duration_intr) + "\n";
+                system_status += print_PCB(awakened, wait_queue) + "\n";
+
+                // Scheduler called: choose awakened process to run (simplified)
+                execution += std::to_string(current_time) + ", 0, scheduler called (wake process PID " + std::to_string(awakened.PID) + ")\n";
+                execution += std::to_string(current_time) + ", 1, IRET\n";
+                current_time += 1;
+
+                // make awakened the current process for subsequent trace processing
+                current = awakened;
+            } else {
+                // No waiting processes
+                execution += std::to_string(current_time) + ", 0, scheduler called (no waiting process)\n";
+                execution += std::to_string(current_time) + ", 1, IRET\n";
+                current_time += 1;
+            }
         } else if(activity == "FORK") {
             auto [intr, time] = intr_boilerplate(current_time, 2, 10, vectors);
             execution += intr;
@@ -56,12 +77,22 @@ std::tuple<std::string, std::string, int> simulate_trace(std::vector<std::string
             current_time += duration_intr;
 
             // Create child PCB (copy parent, assign new PID)
-            PCB child(next_pid++, current.PID, current.program_name, current.size, current.partition_number);
+            PCB child(next_pid++, current.PID, current.program_name, current.size, -1);
+
+            // Parent becomes waiting (simulated block) and child is scheduled. Attempt to allocate memory for child.
             wait_queue.push_back(current); // parent is now waiting
-            
-            // Log snapshot of system after FORK
+
+            bool child_allocated = allocate_memory(&child);
+
+            // Log snapshot of system after FORK, showing child and wait queue
             system_status += "time: " + std::to_string(current_time) + "; current trace: FORK, " + std::to_string(duration_intr) + "\n";
-            system_status += print_PCB(child, wait_queue) + "\n";
+            if(child_allocated) {
+                system_status += print_PCB(child, wait_queue) + "\n";
+            } else {
+                // Child couldn't be allocated: mark as not in memory (partition -1)
+                system_status += "Child PID " + std::to_string(child.PID) + " allocation failed - no partition available\n";
+                system_status += print_PCB(child, wait_queue) + "\n";
+            }
             
             // Scheduler called and returned
             execution += std::to_string(current_time) + ", 0, scheduler called\n";

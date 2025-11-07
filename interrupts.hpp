@@ -218,7 +218,7 @@ void write_output(std::string execution, const char* filename) {
         std::cerr << "Error opening file!" << std::endl;
     }
 
-    std::cout << "Output generated in execution.txt" << std::endl;
+    std::cout << "Output generated in " << filename << std::endl;
 }
 
 //Helper function for a sanity check. Prints the external files table
