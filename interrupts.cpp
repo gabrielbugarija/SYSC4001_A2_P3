@@ -5,7 +5,8 @@
  *
  */
 
-#include<interrupts.hpp>
+#include "interrupts.hpp"
+
 
 std::tuple<std::string, std::string, int> simulate_trace(std::vector<std::string> trace_file, int time, std::vector<std::string> vectors, std::vector<int> delays, std::vector<external_file> external_files, PCB current, std::vector<PCB> wait_queue, int &next_pid) {
 
@@ -23,13 +24,21 @@ std::tuple<std::string, std::string, int> simulate_trace(std::vector<std::string
         if(activity == "CPU") { //As per Assignment 1
             execution += std::to_string(current_time) + ", " + std::to_string(duration_intr) + ", CPU Burst\n";
             current_time += duration_intr;
-        } else if(activity == "SYSCALL") { //As per Assignment 1
+        } else if(activity == "SYSCALL") {
             auto [intr, time] = intr_boilerplate(current_time, duration_intr, 10, vectors);
             execution += intr;
             current_time = time;
 
             execution += std::to_string(current_time) + ", " + std::to_string(delays[duration_intr]) + ", SYSCALL ISR: handle syscall (validate args, perform service)\n";
             current_time += delays[duration_intr];
+
+            // Block the current process and add to wait queue
+            wait_queue.push_back(current);
+
+            // Log system state after blocking
+            system_status += "time: " + std::to_string(current_time) + "; current trace: SYSCALL, " + std::to_string(duration_intr) + "\n";
+            PCB blocked_pcb(-1, -1, "blocked", 0, -1); // Dummy PCB to represent blocked state
+            system_status += print_PCB(blocked_pcb, wait_queue) + "\n";
 
             execution +=  std::to_string(current_time) + ", 1, IRET\n";
             current_time += 1;
@@ -76,23 +85,15 @@ std::tuple<std::string, std::string, int> simulate_trace(std::vector<std::string
             execution += std::to_string(current_time) + ", " + std::to_string(duration_intr) + ", cloning the PCB\n";
             current_time += duration_intr;
 
-            // Create child PCB (copy parent, assign new PID)
-            PCB child(next_pid++, current.PID, current.program_name, current.size, -1);
+            // Create child PCB (copy parent, assign new PID, share partition)
+            PCB child(next_pid++, current.PID, current.program_name, current.size, current.partition_number);
 
-            // Parent becomes waiting (simulated block) and child is scheduled. Attempt to allocate memory for child.
+            // Parent becomes waiting (simulated block) and child is scheduled
             wait_queue.push_back(current); // parent is now waiting
-
-            bool child_allocated = allocate_memory(&child);
 
             // Log snapshot of system after FORK, showing child and wait queue
             system_status += "time: " + std::to_string(current_time) + "; current trace: FORK, " + std::to_string(duration_intr) + "\n";
-            if(child_allocated) {
-                system_status += print_PCB(child, wait_queue) + "\n";
-            } else {
-                // Child couldn't be allocated: mark as not in memory (partition -1)
-                system_status += "Child PID " + std::to_string(child.PID) + " allocation failed - no partition available\n";
-                system_status += print_PCB(child, wait_queue) + "\n";
-            }
+            system_status += print_PCB(child, wait_queue) + "\n";
             
             // Scheduler called and returned
             execution += std::to_string(current_time) + ", 0, scheduler called\n";
@@ -140,7 +141,7 @@ std::tuple<std::string, std::string, int> simulate_trace(std::vector<std::string
 
             if (!child_trace.empty()) {
                 auto [child_exec, child_status, child_end_time] =
-                    simulate_trace(child_trace, current_time, vectors, delays, external_files, child, wait_queue, next_pid);
+                    simulate_trace(child_trace, current_time, vectors, delays, external_files, child, std::ref(wait_queue), next_pid);
             
                 execution += child_exec;
                 system_status += child_status;
@@ -209,12 +210,13 @@ std::tuple<std::string, std::string, int> simulate_trace(std::vector<std::string
 
             if (!exec_traces.empty()) {
                 auto [exec_exec, exec_status, exec_end_time] =
-                    simulate_trace(exec_traces, current_time, vectors, delays, external_files, current, wait_queue, next_pid);
+                    simulate_trace(exec_traces, current_time, vectors, delays, external_files, current, std::ref(wait_queue), next_pid);
             
                 execution += exec_exec;
                 system_status += exec_status;
                 current_time = exec_end_time;
             }
+
 
 
 
